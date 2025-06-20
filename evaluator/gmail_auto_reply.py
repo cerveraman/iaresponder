@@ -8,7 +8,7 @@ import mysql.connector
 # Cargar variables de entorno desde .env
 load_dotenv()
 
-def run_query(query: str):
+def run_query():
     # Lee las credenciales de MySQL
     db_config = {
         'host': os.getenv("MYSQL_HOST"),
@@ -22,22 +22,22 @@ def run_query(query: str):
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
 
-        cursor.execute('SELECT ticketid FROM swtickets WHERE departmenttitle = "Area Xalok" AND ticketstatustitle = "Abierto" AND dateline <= UNIX_TIMESTAMP(NOW()) - 60 AND laststaffreplytime = 0')
+        #cursor.execute('SELECT ticketid,ticketmaskid FROM swtickets WHERE departmenttitle = "Area Xalok" AND ticketstatustitle = "Abierto" AND dateline <= UNIX_TIMESTAMP(NOW()) - 300 AND laststaffreplytime = 0')
+        cursor.execute('SELECT ticketid,ticketmaskid FROM swtickets WHERE departmenttitle = "Area Xalok" AND ticketstatustitle = "Abierto"')
         result = cursor.fetchall()
         cursor.close()
         for row in result:
             cursor = conn.cursor()
             cursor.execute('SELECT contents FROM swticketposts where ticketid = ' + str(row[0]))
             contenido = cursor.fetchall()
-            print(contenido[0][0])
             cursor.close()
-
-            insertar_nota(str(row[0]), analizar_con_chatgpt(contenido[0][0]) )
-        
+            if not existe_nota_clasificada_por_ia(conn, str(row[0])):
+                insertar_nota(conn,str(row[0]), analizar_con_chatgpt(contenido[0][0]) )
         conn.close()
         return result
     except mysql.connector.Error as err:
         print(f"Error: {err}")
+        conn.close()
         return None
 
 def analizar_con_chatgpt(consulta):
@@ -50,19 +50,17 @@ def analizar_con_chatgpt(consulta):
 El departamento en el que trabajo se encarga de implementar mediante IAC las infraestructuras Cloud donde se ejecuta este CMS, y que estan formadas principalmenente por CDN CloudFront, balanceadores de carga, capas de instancias EC2 autoescalables (capa de cache Varnish, capa de aplicacion, capa de backoffice), AWS RDS con motor MySQL, AWS OpenSearch, Redis, y buckets S3
 
 Estas infraestructuras Cloud de Xalok cuentan con un soporte de mantenimiento MGA en formato 24x7 que permite garantizar la continuidad del servicio gracias a un equipo N1 de monitorización proactiva con capacidad para realizar primeras intervenciones y diagnósticos, y con posibilidad de escalar a un equipo especializado N2 con conocimientos específicos de las infraestructuras.
-
+Tambien existe un sistema automatico de reporte de incidencias mediante Icinga Monitoring System, que reporta las incidencias de tipo Critical y Warning, que llevan en el texto del ticket la palabra "Icinga", si no llevan esa palabra, se considera que son incidencias reportadas por el cliente.
 El servicio de soporte cuenta con un SLA que clasifica las incidencias del servicio, y da respuesta y resolución a las mismas según las siguientes tablas.
-* ELEMENTOS “VITALES”: Sitio no actualiza, Portada, Boards, Conjunto global de imágenes, Secciones de primer nivel, Directo, Breaking News, Noticia de últimas 24 horas, Publicidad, Sitemap principal de Google.
+* ELEMENTOS “VITALES”: Sitio no actualiza, Portada, Boards, Conjunto global de imágenes, Secciones de primer nivel, Directo, Breaking News, Noticia de últimas 24 horas, Publicidad, Sitemap principal de Google, tambien todas as reportadas por Icinga Monitoring System como Critical se considera que afectan a los elementos vitales del sitio.
 ** El contrato de mantenimiento MGA da soporte a todas aquellas incidencias relacionadas con los recursos y servicios Cloud sobre los que se ejecuta la aplicación de Xalok, quedando fuera de este soporte errores relacionados con el código de la aplicación.
 *** Las incidencias de tipo P1 tienen que afectar a todos los usuarios y/o redactores, y ser reproducibles por el equipo de infraestructura para ser consideradas como tales.
 
-P1: Incidencia crítica: Existe un problema grave que afecta a uno o varios de los elementos vitales del site y que impide su visibilidad o actualización
+P1: Incidencia crítica: Existe un problema grave que afecta a uno o varios de los elementos vitales del site y que impide su visibilidad o actualización. Los elementos vitales son uncamente los indicados anteriormente en la seccion ELEMENTOS VITALES.
 
 P2: Incidencia NO crítica: el rendimiento de la infraestructura está degradado sin afectar al servicio en su totalidad, o alguna de las funcionalidades "no vitales" de la aplicación muestra problemas.
 
 P3: Solicitud o tarea: la plataforma funciona con normalidad, pero existe opción de mejora en la funcionalidad u operatividad.
-
-
 
 Tiempos del SLA genérico:
 Plazo máx. primera respuesta: P1 - 1 hora, P2 - 6 horas*, P3 - 24 horas*
@@ -87,17 +85,34 @@ Con toda esta informacion voy a pasarte una incidencia de cliente y necesito que
         print(f"Error al llamar a ChatGPT: {e}")
         return "Error"
 
-def insertar_nota(linktypeid, note):
-    db_config = {
-        'host': os.getenv("MYSQL_HOST"),
-        'user': os.getenv("MYSQL_USER"),
-        'password': os.getenv("MYSQL_PASSWORD"),
-        'database': os.getenv("MYSQL_DATABASE"),
-        'port': int(os.getenv("MYSQL_PORT", 3306)),
-    }
-    try:
-        conn = mysql.connector.connect(**db_config)
+def existe_nota_clasificada_por_ia(conexion, linktypeid):
+    """
+    Verifica si existe al menos una nota en la tabla swticketnotes
+    con el linktypeid dado y que contenga el texto específico.
 
+    :param conexion: Objeto de conexión a MySQL
+    :param linktypeid: Valor del campo linktypeid a consultar
+    :return: True si existe al menos una coincidencia, False si no
+    """
+    try:
+        cursor = conexion.cursor()
+        consulta = """
+            SELECT 1
+            FROM swticketnotes
+            WHERE linktypeid = %s
+            AND note LIKE %s
+            LIMIT 1
+        """
+        cursor.execute(consulta, (linktypeid, '%Esta incidencia ha sido clasificada por IA%'))
+        resultado = cursor.fetchone()
+        cursor.close()
+        return resultado is not None
+    except mysql.connector.Error as err:
+        print(f"Error al consultar la base de datos: {err}")
+        return False
+
+def insertar_nota(conn,linktypeid, note):
+    try:
         cursor = conn.cursor()
 
         query = """
@@ -126,6 +141,6 @@ def insertar_nota(linktypeid, note):
 if __name__ == "__main__":
     QUERY = 'SELECT * FROM swtickets WHERE departmenttitle = "Area Xalok" AND ticketstatustitle = "Abierto" AND laststaffreplytime = 0'  # Cambia por tu consulta
     while True:
-        run_query(QUERY)
+        run_query()
         #analizar_con_chatgpt("se ha caido el site, no puedo acceder a nada")
         time.sleep(300)

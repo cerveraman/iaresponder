@@ -10,6 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar el script principal
 COPY gmail_auto_reply.py .
 
-# Ejecutar el script en modo interactivo
-CMD ["python", "gmail_auto_reply.py"]
+# Usar ENTRYPOINT para permitir pasar argumentos
+ENTRYPOINT ["python", "gmail_auto_reply.py"]
 
