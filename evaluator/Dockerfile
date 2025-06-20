@@ -11,5 +11,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY gmail_auto_reply.py .
 
 # Ejecutar el script en modo interactivo
-CMD ["python", "gmail_auto_reply.py"]
+CMD ["python", "evaluator.py"]
 
